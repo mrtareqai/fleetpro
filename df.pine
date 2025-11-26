@@ -1,0 +1,326 @@
+//@version=5
+indicator("Μουστάφος (Kháos)", shorttitle="Μουστάφος (Kháos)", overlay=true)
+
+// =======================
+// ## الدوال (Functions)
+// =======================
+f_get_table_pos(pos) =>
+    pos == "أعلى اليمين" ? position.top_right :
+     pos == "أسفل اليمين" ? position.bottom_right :
+     pos == "أعلى اليسار" ? position.top_left :
+     position.bottom_left
+
+// =======================
+// ## المدخلات (Inputs)
+// =======================
+g_main = "1. Main Indicator"
+len_bbp = input.int(13, title="BBP Length", group=g_main)
+len_swing = input.int(3, title="Swing Lookback", group=g_main)
+
+g_ma = "2. Moving Averages"
+len_sma1 = input.int(9, title="SMA 1", group=g_ma)
+len_sma2 = input.int(50, title="SMA 2", group=g_ma)
+len_sma3 = input.int(180, title="SMA 3", group=g_ma)
+len_ema1 = input.int(20, title="EMA 1", group=g_ma)
+
+g_targets = "3. ATR Price Targets & SL"
+targets_enabled = input.bool(true, "تفعيل الأهداف ووقف الخسارة", group=g_targets)
+atr_len = input.int(14, "ATR Length", group=g_targets)
+sl_multiplier = input.float(1.5, "مضاعف وقف الخسارة (SL)", group=g_targets, step=0.1)
+tp1_multiplier = input.float(1.5, "مضاعف الهدف الأول (TP1)", group=g_targets, step=0.1)
+tp2_multiplier = input.float(3.0, "مضاعف الهدف الثاني (TP2)", group=g_targets, step=0.1)
+
+g_dashboard = "4. Live Dashboard"
+dashboard_enabled = input.bool(true, "تفعيل اللوحة الحية", group=g_dashboard)
+dashboard_pos_str = input.string("أعلى اليمين", "مكان اللوحة الحية", options=["أعلى اليمين", "أسفل اليمين", "أعلى اليسار", "أسفل اليسار"], group=g_dashboard)
+
+g_log = "5. Performance Log (Main)"
+log_enabled = input.bool(true, "تفعيل سجل الأداء الرئيسي", group=g_log)
+log_pos_str = input.string("أسفل اليسار", "مكان سجل الأداء الرئيسي", options=["أعلى اليمين", "أسفل اليمين", "أعلى اليسار", "أسفل اليسار"], group=g_log)
+log_size = input.int(50, "عدد الصفقات للتسجيل (في الذاكرة)", group=g_log, minval=10, maxval=200)
+log_display_size = input.int(5, "عدد الصفقات للعرض (في الجدول)", group=g_log, minval=3, maxval=10)
+
+g_ranging = "6. Ranging Market Filter (ADX)"
+ranging_enabled = input.bool(true, title="تفعيل فلتر السوق العرضي", group=g_ranging)
+len_adx = input.int(14, title="ADX Length", group=g_ranging)
+adx_threshold = input.float(23, title="عتبة ADX للسوق العرضي", group=g_ranging)
+
+g_ranging_log = "7. Performance Log (Ranging)"
+ranging_log_enabled = input.bool(true, "تفعيل سجل أداء السوق العرضي", group=g_ranging_log)
+ranging_log_pos_str = input.string("أسفل اليمين", "مكان سجل الأداء العرضي", options=["أعلى اليمين", "أسفل اليمين", "أعلى اليسار", "أسفل اليسار"], group=g_ranging_log)
+ranging_log_display_size = input.int(5, "عدد الصفقات للعرض (في الجدول)", group=g_ranging_log, minval=3, maxval=10)
+
+g_forecast = "8. Market Analysis Panel"
+forecast_enabled = input.bool(true, "تفعيل لوحة تحليل السوق", group=g_forecast)
+forecast_pos_str = input.string("أعلى اليسار", "مكان لوحة التحليل", options=["أعلى اليمين", "أسفل اليمين", "أعلى اليسار", "أسفل اليسار"], group=g_forecast)
+proximity_multiplier = input.float(2.0, "مضاعف ATR لقياس قرب الإشارة", group=g_forecast, step=0.5)
+
+
+// =======================
+// ## الحسابات (Calculations)
+// =======================
+ema_bbp = ta.ema(close, len_bbp)
+bbp = (high - ema_bbp) + (low - ema_bbp)
+sma1 = ta.sma(close, len_sma1)
+sma2 = ta.sma(close, len_sma2)
+sma3 = ta.sma(close, len_sma3)
+ema1 = ta.ema(close, len_ema1)
+atr_value = ta.atr(atr_len)
+
+res = ta.highest(high, len_swing)
+sup = ta.lowest(low, len_swing)
+avd = close > res[1] ? 1 : close < sup[1] ? -1 : 0
+avn = ta.valuewhen(avd != 0, avd, 0)
+tsl = avn == 1 ? sup : res
+buy_signal = ta.crossover(close, tsl)
+sell_signal = ta.crossunder(close, tsl)
+
+[di_plus, di_minus, adx_value] = ta.dmi(len_adx, len_adx)
+is_ranging = adx_value < adx_threshold
+
+// =======================
+// ## منطق الاحتمالات والتحليل
+// =======================
+string market_state_text = ""
+float market_state_strength = 0.0
+if (adx_value >= adx_threshold)
+    if (di_plus > di_minus)
+        market_state_text := "اتجاه صاعد واضح"
+    else
+        market_state_text := "اتجاه هابط واضح"
+    market_state_strength := 50 + (adx_value - adx_threshold) * 1.5
+else
+    market_state_text := "سوق عرضي"
+    market_state_strength := 50 + (adx_threshold - adx_value) * 1.5
+
+market_state_strength := math.min(100, market_state_strength)
+
+string next_signal_text = ""
+float next_signal_prob = 0.0
+distance_to_tsl = math.abs(close - tsl)
+max_distance = atr_value * proximity_multiplier
+
+if (distance_to_tsl < max_distance)
+    next_signal_prob := 100 * (1 - (distance_to_tsl / max_distance))
+else
+    next_signal_prob := 0
+
+if (next_signal_prob > 10)
+    if (close < tsl)
+        next_signal_text := "صفقة شراء ▲"
+    else
+        next_signal_text := "صفقة بيع ▼"
+else
+    next_signal_text := "لا توجد إشارة قريبة"
+
+
+// =======================
+// ## منطق الأهداف وتتبع الحالة الحية
+// =======================
+var float entry_price = na, var float take_profit_1 = na, var float take_profit_2 = na, var float stop_loss_price = na, var int signal_bar_index = na
+var float sl_pct = na, var float tp1_pct = na, var float tp2_pct = na
+var string last_signal_type = na
+var bool tp1_hit = false, var bool tp2_hit = false
+
+if (buy_signal)
+    entry_price := close, take_profit_1 := close + (atr_value * tp1_multiplier), take_profit_2 := close + (atr_value * tp2_multiplier), stop_loss_price := close - (atr_value * sl_multiplier)
+    signal_bar_index := bar_index
+    sl_pct := ((stop_loss_price / entry_price) - 1) * 100, tp1_pct := ((take_profit_1 / entry_price) - 1) * 100, tp2_pct := ((take_profit_2 / entry_price) - 1) * 100
+    last_signal_type := "buy", tp1_hit := false, tp2_hit := false
+
+if (sell_signal)
+    entry_price := close, take_profit_1 := close - (atr_value * tp1_multiplier), take_profit_2 := close - (atr_value * tp2_multiplier), stop_loss_price := close + (atr_value * sl_multiplier)
+    signal_bar_index := bar_index
+    sl_pct := ((stop_loss_price / entry_price) - 1) * 100, tp1_pct := ((take_profit_1 / entry_price) - 1) * 100, tp2_pct := ((take_profit_2 / entry_price) - 1) * 100
+    last_signal_type := "sell", tp1_hit := false, tp2_hit := false
+
+if not na(entry_price)
+    if last_signal_type == "buy"
+        if not tp1_hit and high >= take_profit_1
+            tp1_hit := true
+        if not tp2_hit and high >= take_profit_2
+            tp2_hit := true
+    else if last_signal_type == "sell"
+        if not tp1_hit and low <= take_profit_1
+            tp1_hit := true
+        if not tp2_hit and low <= take_profit_2
+            tp2_hit := true
+
+// =======================
+// ## منطق سجل الأداء
+// =======================
+var main_trade_outcomes = array.new_string()
+var main_trade_directions = array.new_string()
+var ranging_trade_outcomes = array.new_string()
+var ranging_trade_directions = array.new_string()
+
+var active_trade_direction = ""
+var float active_trade_entry = na
+var float active_trade_sl = na
+var float active_trade_tp = na
+var bool active_trade_is_ranging = false
+
+if barstate.isconfirmed
+    bool trade_closed = false
+    string outcome = ""
+    if active_trade_direction == "شراء"
+        if low <= active_trade_sl
+            trade_closed := true, outcome := "❌"
+        else if high >= active_trade_tp
+            trade_closed := true, outcome := "✅"
+        else if sell_signal
+            trade_closed := true, outcome := close > active_trade_entry ? "✅" : "❌"
+    else if active_trade_direction == "بيع"
+        if high >= active_trade_sl
+            trade_closed := true, outcome := "❌"
+        else if low <= active_trade_tp
+            trade_closed := true, outcome := "✅"
+        else if buy_signal
+            trade_closed := true, outcome := close < active_trade_entry ? "✅" : "❌"
+
+    if trade_closed
+        if active_trade_is_ranging
+            array.unshift(ranging_trade_outcomes, outcome)
+            array.unshift(ranging_trade_directions, active_trade_direction)
+            if array.size(ranging_trade_outcomes) > log_size
+                array.pop(ranging_trade_outcomes)
+                array.pop(ranging_trade_directions)
+        else
+            array.unshift(main_trade_outcomes, outcome)
+            array.unshift(main_trade_directions, active_trade_direction)
+            if array.size(main_trade_outcomes) > log_size
+                array.pop(main_trade_outcomes)
+                array.pop(main_trade_directions)
+        
+        active_trade_direction := ""
+
+    if active_trade_direction == "" and (buy_signal or sell_signal)
+        active_trade_direction := buy_signal ? "شراء" : "بيع"
+        active_trade_entry := entry_price
+        active_trade_sl := stop_loss_price
+        active_trade_tp := take_profit_1
+        active_trade_is_ranging := ranging_enabled and is_ranging[1]
+
+// =======================
+// ## الرسم البياني الرئيسي
+// =======================
+plot(sma1, color=color.new(color.red, 0), title="SMA 1")
+plot(sma2, color=color.new(color.blue, 0), title="SMA 2")
+plot(sma3, color=color.new(color.white, 0), title="SMA 3")
+plot(ema1, color=color.new(color.yellow, 0), title="EMA 1")
+plot(tsl, color=close >= tsl ? color.green : color.red, linewidth=3, title="Buy/Sell Line")
+
+plotshape(buy_signal, "Buy", shape.arrowup, location.belowbar, color.new(color.green, 0))
+plotshape(sell_signal, "Sell", shape.arrowdown, location.abovebar, color.new(color.red, 0))
+
+if (buy_signal and ranging_enabled and is_ranging[1])
+    label.new(bar_index, low - ta.tr * 0.1, text="سوق عرضي\nمخاطرة عالية", 
+      style=label.style_label_up, color=color.new(color.orange, 25), 
+      textcolor=color.white, textalign=text.align_center)
+
+if (sell_signal and ranging_enabled and is_ranging[1])
+    label.new(bar_index, high + ta.tr * 0.1, text="سوق عرضي\nمخاطرة عالية", 
+      style=label.style_label_down, color=color.new(color.orange, 25), 
+      textcolor=color.white, textalign=text.align_center)
+
+if (targets_enabled and bar_index == signal_bar_index)
+    line.new(bar_index, entry_price, bar_index + 1, entry_price, color=color.new(color.gray, 0), style=line.style_dashed, width=1, extend=extend.right)
+    label.new(bar_index + 1, entry_price, "Entry: " + str.tostring(entry_price, format.mintick), style=label.style_none, textcolor=color.new(color.gray, 0))
+    line.new(bar_index, stop_loss_price, bar_index + 1, stop_loss_price, color=color.new(color.red, 0), style=line.style_dashed, width=1, extend=extend.right)
+    label.new(bar_index + 1, stop_loss_price, "SL: " + str.tostring(stop_loss_price, format.mintick), style=label.style_none, textcolor=color.new(color.red, 0))
+    line.new(bar_index, take_profit_1, bar_index + 1, take_profit_1, color=color.new(color.aqua, 0), style=line.style_dashed, width=1, extend=extend.right)
+    label.new(bar_index + 1, take_profit_1, "TP1: " + str.tostring(take_profit_1, format.mintick), style=label.style_none, textcolor=color.new(color.aqua, 0))
+    line.new(bar_index, take_profit_2, bar_index + 1, take_profit_2, color=color.new(color.yellow, 0), style=line.style_dashed, width=1, extend=extend.right)
+    label.new(bar_index + 1, take_profit_2, "TP2: " + str.tostring(take_profit_2, format.mintick), style=label.style_none, textcolor=color.new(color.yellow, 0))
+
+// =======================
+// ## عرض اللوحات
+// =======================
+
+// -- لوحة ملخص الصفقة الحية --
+var dashboard = table.new(f_get_table_pos(dashboard_pos_str), 2, 5, border_width=1)
+if (dashboard_enabled and barstate.islast and not na(entry_price))
+    table.clear(dashboard, 0, 0, 1, 4)
+    table.cell(dashboard, 0, 0, "ملخص الصفقة الحالية", 2, bgcolor=color.new(color.gray, 70))
+    table.cell(dashboard, 0, 1, "سعر الدخول"), table.cell(dashboard, 1, 1, str.tostring(entry_price, format.mintick))
+    table.cell(dashboard, 0, 2, "وقف الخسارة"), table.cell(dashboard, 1, 2, str.tostring(sl_pct, "#.00") + "%", text_color=color.new(color.red, 0))
+    table.cell(dashboard, 0, 3, "الهدف (TP1 / TP2)"), table.cell(dashboard, 1, 3, str.tostring(tp1_pct, "+#.00") + "% / " + str.tostring(tp2_pct, "+#.00") + "%", text_color=color.new(color.green, 0))
+    status_text = tp2_hit ? "تم ضرب الهدف الثاني ✅" : tp1_hit ? "تم ضرب الهدف الأول ✅" : "في انتظار الهدف..."
+    status_color = tp2_hit ? color.new(color.yellow, 0) : tp1_hit ? color.new(color.aqua, 0) : color.white
+    table.cell(dashboard, 0, 4, "حالة الأهداف"), table.cell(dashboard, 1, 4, status_text, text_color=status_color)
+
+// -- دالة لرسم جداول الأداء بتصميم جديد --
+f_draw_log_table(table log_table, string title, array<string> outcomes, array<string> directions, int display_size) =>
+    color HEADER_BG = #1E222D // Dark Blue-Gray
+    color ROW_BG_DARK = color.new(#2A2E39, 30)
+    color ROW_BG_LIGHT = color.new(#434651, 30)
+    color TEXT_HEADER = color.new(color.white, 0)
+    color TEXT_GENERAL = color.new(color.white, 30)
+    color WIN_COLOR = color.new(color.teal, 0)
+    color LOSS_COLOR = color.new(color.orange, 0)
+
+    table.clear(log_table, 0, 0, 3, display_size + 2)
+    int wins = 0
+    for outcome in outcomes
+        if outcome == "✅"
+            wins += 1
+    total = array.size(outcomes)
+    losses = total - wins
+    win_rate = total > 0 ? wins * 100 / total : 0
+    
+    table.merge_cells(log_table, 0, 0, 3, 0)
+    table.cell(log_table, 0, 0, title, bgcolor=HEADER_BG, text_color=TEXT_HEADER, text_size=size.normal)
+    
+    table.cell(log_table, 0, 1, "Win Rate: " + str.tostring(win_rate, "#.0") + "%", text_color = win_rate > 55 ? WIN_COLOR : win_rate < 45 ? LOSS_COLOR : TEXT_GENERAL)
+    table.cell(log_table, 1, 1, "Wins: " + str.tostring(wins), text_color=WIN_COLOR)
+    table.cell(log_table, 2, 1, "Losses: " + str.tostring(losses), text_color=LOSS_COLOR)
+    table.cell(log_table, 3, 1, "Total: " + str.tostring(total), text_color=TEXT_GENERAL)
+    
+    for i = 0 to math.min(total - 1, display_size - 1)
+        row_bg_color = i % 2 != 0 ? ROW_BG_DARK : ROW_BG_LIGHT
+        direction = array.get(directions, i)
+        outcome = array.get(outcomes, i)
+        is_buy = direction == "شراء"
+        is_win = outcome == "✅"
+        
+        table.cell(log_table, 0, i + 2, str.tostring(total - i), text_color=TEXT_GENERAL, bgcolor=row_bg_color)
+        table.cell(log_table, 1, i + 2, is_buy ? "▲ LONG" : "▼ SHORT", text_color=is_buy ? WIN_COLOR : LOSS_COLOR, bgcolor=row_bg_color)
+        table.cell(log_table, 2, i + 2, is_win ? "WIN" : "LOSS", text_color=is_win ? WIN_COLOR : LOSS_COLOR, bgcolor=row_bg_color)
+        table.cell(log_table, 3, i + 2, outcome, text_color=is_win ? WIN_COLOR : LOSS_COLOR, bgcolor=row_bg_color)
+
+// -- لوحة سجل الأداء الرئيسي --
+var main_log_table = table.new(f_get_table_pos(log_pos_str), 4, log_display_size + 3, border_width=2, border_color=#434651)
+if log_enabled and barstate.islast
+    f_draw_log_table(main_log_table, "سجل الأداء (السوق السائد)", main_trade_outcomes, main_trade_directions, log_display_size)
+
+// -- لوحة سجل أداء السوق العرضي --
+var ranging_log_table = table.new(f_get_table_pos(ranging_log_pos_str), 4, ranging_log_display_size + 3, border_width=2, border_color=#434651)
+if ranging_log_enabled and barstate.islast
+    f_draw_log_table(ranging_log_table, "سجل الأداء (السوق العرضي)", ranging_trade_outcomes, ranging_trade_directions, ranging_log_display_size)
+
+// -- لوحة تحليل السوق الجديدة --
+var forecast_table = table.new(f_get_table_pos(forecast_pos_str), 2, 5, border_width=2, border_color=#434651)
+if forecast_enabled and barstate.islast
+    color HEADER_BG = #1E222D // Dark Blue-Gray
+    color TEXT_HEADER = color.new(color.white, 0)
+    color TEXT_GENERAL = color.new(color.white, 30)
+    color UP_COLOR = color.new(color.teal, 0)
+    color DOWN_COLOR = color.new(color.orange, 0)
+    color RANGE_COLOR = color.new(color.gray, 0)
+
+    table.clear(forecast_table, 0, 0, 1, 4)
+    table.cell(forecast_table, 0, 0, "تحليل حالة السوق", 2, bgcolor=HEADER_BG, text_color=TEXT_HEADER)
+
+    color state_color = market_state_text == "اتجاه صاعد واضح" ? UP_COLOR : market_state_text == "اتجاه هابط واضح" ? DOWN_COLOR : RANGE_COLOR
+    table.cell(forecast_table, 0, 1, "الحالة الحالية:", text_color=TEXT_GENERAL)
+    table.cell(forecast_table, 1, 1, market_state_text, text_color=state_color)
+    
+    table.cell(forecast_table, 0, 2, "نسبة قوة الحالة:", text_color=TEXT_GENERAL)
+    table.cell(forecast_table, 1, 2, str.tostring(market_state_strength, "#.0") + "%", text_color=state_color)
+    
+    color signal_color = next_signal_text == "صفقة شراء ▲" ? UP_COLOR : next_signal_text == "صفقة بيع ▼" ? DOWN_COLOR : RANGE_COLOR
+    table.cell(forecast_table, 0, 3, "الإشارة القادمة المحتملة:", text_color=TEXT_GENERAL)
+    table.cell(forecast_table, 1, 3, next_signal_text, text_color=signal_color)
+
+    table.cell(forecast_table, 0, 4, "احتمالية قرب الإشارة:", text_color=TEXT_GENERAL)
+    table.cell(forecast_table, 1, 4, next_signal_text == "لا توجد إشارة قريبة" ? "---" : str.tostring(next_signal_prob, "#.0") + "%", text_color=signal_color)
